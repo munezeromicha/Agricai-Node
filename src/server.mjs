@@ -6,7 +6,13 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import nodemailer from "nodemailer";
-import { buildSystemInstruction, loadClassesSnippet } from "./chatContext.mjs";
+import {
+  buildSystemInstruction,
+  loadClassesSnippet,
+  loadProjectKnowledge,
+  resolveClassesJsonPath,
+  resolveProjectKnowledgePath,
+} from "./chatContext.mjs";
 
 dotenv.config();
 
@@ -32,10 +38,20 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY?.trim();
  * Use a current ID from https://ai.google.dev/gemini-api/docs/models — default is stable Flash.
  */
 const GEMINI_MODEL = process.env.GEMINI_MODEL?.trim() || "gemini-2.5-flash";
+/** Used when the primary model returns 503/429 or is unavailable. */
+const GEMINI_FALLBACK_MODELS = [
+  "gemini-2.5-flash",
+  "gemini-2.0-flash",
+  "gemini-2.5-flash-lite",
+];
 /** Cap disease-library JSON in the system prompt to reduce input tokens (helps per-minute free limits). */
 const GEMINI_CLASSES_MAX_CHARS = Math.min(
   Math.max(Number(process.env.GEMINI_CLASSES_MAX_CHARS) || 6000, 2000),
   50000,
+);
+const GEMINI_PROJECT_MAX_CHARS = Math.min(
+  Math.max(Number(process.env.GEMINI_PROJECT_MAX_CHARS) || 12000, 1000),
+  80000,
 );
 
 function sleep(ms) {
@@ -47,6 +63,22 @@ function isQuotaOrRateLimitError(err) {
   if (err.status === 429) return true;
   const s = String(err.message || "");
   return /429|Too Many Requests|quota exceeded|RESOURCE_EXHAUSTED/i.test(s);
+}
+
+/** Transient Google errors — retry or try another model. */
+function isRetryableGeminiError(err) {
+  if (!err) return false;
+  if (err.status === 429 || err.status === 503 || err.status === 500) return true;
+  const s = String(err.message || "");
+  return /503|502|500|429|Service Unavailable|high demand|try again later|RESOURCE_EXHAUSTED|Too Many Requests/i.test(
+    s,
+  );
+}
+
+function geminiModelsToTry() {
+  const primary = GEMINI_MODEL;
+  const list = [primary, ...GEMINI_FALLBACK_MODELS];
+  return [...new Set(list.filter(Boolean))];
 }
 
 /** Short message for API clients; detailed logs stay server-side. */
@@ -113,6 +145,10 @@ app.get("/health", (_req, res) => {
     ok: true,
     service: "agricai-contact-api",
     geminiConfigured: Boolean(GEMINI_API_KEY),
+    knowledge: {
+      classesJson: resolveClassesJsonPath(),
+      projectKnowledge: resolveProjectKnowledgePath(),
+    },
   });
 });
 
@@ -197,12 +233,16 @@ app.post("/api/chat", async (req, res) => {
   const userText = thread[thread.length - 1].content;
 
   const classesSnippet = loadClassesSnippet(GEMINI_CLASSES_MAX_CHARS);
-  const systemInstruction = buildSystemInstruction(language, { classesSnippet });
+  const projectKnowledge = loadProjectKnowledge(GEMINI_PROJECT_MAX_CHARS);
+  const systemInstruction = buildSystemInstruction(language, {
+    classesSnippet,
+    projectKnowledge,
+  });
 
-  const runOnce = async () => {
+  const runWithModel = async (modelName) => {
     const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
     const model = genAI.getGenerativeModel({
-      model: GEMINI_MODEL,
+      model: modelName,
       systemInstruction,
     });
     const chat = model.startChat({ history });
@@ -210,18 +250,44 @@ app.post("/api/chat", async (req, res) => {
     return result.response.text();
   };
 
-  try {
-    let reply;
-    try {
-      reply = await runOnce();
-    } catch (firstErr) {
-      if (isQuotaOrRateLimitError(firstErr)) {
-        await sleep(2500);
-        reply = await runOnce();
-      } else {
-        throw firstErr;
+  const runWithRetries = async (modelName) => {
+    const delays = [0, 1500, 3000];
+    let lastErr;
+    for (let attempt = 0; attempt < delays.length; attempt++) {
+      if (delays[attempt] > 0) await sleep(delays[attempt]);
+      try {
+        return await runWithModel(modelName);
+      } catch (err) {
+        lastErr = err;
+        if (!isRetryableGeminiError(err) || attempt === delays.length - 1) throw err;
+        console.warn(
+          `[chat] ${modelName} attempt ${attempt + 1} failed (${err.status || "?"}), retrying…`,
+        );
       }
     }
+    throw lastErr;
+  };
+
+  try {
+    let reply;
+    let lastErr;
+    const models = geminiModelsToTry();
+
+    for (const modelName of models) {
+      try {
+        reply = await runWithRetries(modelName);
+        if (modelName !== GEMINI_MODEL) {
+          console.info(`[chat] succeeded with fallback model: ${modelName}`);
+        }
+        break;
+      } catch (err) {
+        lastErr = err;
+        if (!isRetryableGeminiError(err)) break;
+        console.warn(`[chat] model ${modelName} unavailable, trying next…`, err.message);
+      }
+    }
+
+    if (reply === undefined) throw lastErr;
 
     if (!reply || !reply.trim()) {
       res.status(502).json({ ok: false, message: "Empty model response." });
@@ -235,6 +301,16 @@ app.post("/api/chat", async (req, res) => {
         ok: false,
         code: "GEMINI_QUOTA_OR_RATE_LIMIT",
         message: quotaPlainEnglishMessage(),
+      });
+      return;
+    }
+    if (isRetryableGeminiError(err)) {
+      res.status(503).json({
+        ok: false,
+        code: "GEMINI_UNAVAILABLE",
+        message:
+          "The AI assistant is temporarily busy on Google's side. Please wait a moment and try again. " +
+          "If this keeps happening, set GEMINI_MODEL=gemini-2.5-flash in Agricai-Node/.env (avoid gemini-flash-latest).",
       });
       return;
     }
