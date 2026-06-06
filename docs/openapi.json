@@ -1,0 +1,110 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "AGRIC AI Platform API",
+    "description": "Authentication, users, weather, crops, and billing for AGRIC AI. Vision detection is on the Python service at /v1/detect.",
+    "version": "1.0.0"
+  },
+  "servers": [{ "url": "http://localhost:3008", "description": "Local dev" }],
+  "paths": {
+    "/health": {
+      "get": { "summary": "Health check", "responses": { "200": { "description": "OK" } } }
+    },
+    "/api/auth/register": {
+      "post": {
+        "summary": "Register a new user",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["name", "email", "password"],
+                "properties": {
+                  "name": { "type": "string" },
+                  "email": { "type": "string", "format": "email" },
+                  "password": { "type": "string", "minLength": 8 },
+                  "role": { "type": "string", "enum": ["farmer", "restaurant", "enterprise"] }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "201": { "description": "User created" } }
+      }
+    },
+    "/api/auth/login": {
+      "post": {
+        "summary": "Login",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["email", "password"],
+                "properties": {
+                  "email": { "type": "string" },
+                  "password": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "Tokens issued" } }
+      }
+    },
+    "/api/auth/me": {
+      "get": {
+        "summary": "Current user profile and usage",
+        "security": [{ "bearerAuth": [] }],
+        "responses": { "200": { "description": "Profile" } }
+      }
+    },
+    "/api/weather": {
+      "get": {
+        "summary": "Weather forecast proxy (Open-Meteo)",
+        "parameters": [
+          { "name": "lat", "in": "query", "schema": { "type": "number" } },
+          { "name": "lon", "in": "query", "schema": { "type": "number" } }
+        ],
+        "responses": { "200": { "description": "7-day forecast" } }
+      }
+    },
+    "/api/crops": {
+      "get": { "summary": "List supported crops", "responses": { "200": { "description": "Crop list" } } }
+    },
+    "/api/crops/{slug}": {
+      "get": {
+        "summary": "Crop detail",
+        "parameters": [{ "name": "slug", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": { "200": { "description": "Crop detail" } }
+      }
+    },
+    "/api/billing/plans": {
+      "get": { "summary": "Pricing plans", "responses": { "200": { "description": "Plans" } } }
+    },
+    "/api/billing/checkout": {
+      "post": {
+        "summary": "Start checkout (Stripe or stub)",
+        "security": [{ "bearerAuth": [] }],
+        "responses": { "200": { "description": "Checkout URL or stub activation" } }
+      }
+    },
+    "/api/users/me/scans": {
+      "get": {
+        "summary": "Scan history",
+        "security": [{ "bearerAuth": [] }],
+        "responses": { "200": { "description": "Scans" } }
+      },
+      "post": {
+        "summary": "Record a scan",
+        "security": [{ "bearerAuth": [] }],
+        "responses": { "201": { "description": "Scan recorded" } }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": { "type": "http", "scheme": "bearer", "bearerFormat": "JWT" }
+    }
+  }
+}

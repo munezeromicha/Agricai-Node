@@ -13,6 +13,7 @@ import {
   resolveClassesJsonPath,
   resolveProjectKnowledgePath,
 } from "./chatContext.mjs";
+import { mountPlatformApi } from "./platformApi.mjs";
 
 dotenv.config();
 
@@ -135,15 +136,17 @@ app.use(
       const ok = !origin || allowedOrigins.includes(origin);
       callback(null, ok);
     },
-    methods: ["POST", "OPTIONS"],
-    allowedHeaders: ["Content-Type"],
+    methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
   }),
 );
+
+mountPlatformApi(app);
 
 app.get("/health", (_req, res) => {
   res.json({
     ok: true,
-    service: "agricai-contact-api",
+    service: "agricai-platform-api",
     geminiConfigured: Boolean(GEMINI_API_KEY),
     knowledge: {
       classesJson: resolveClassesJsonPath(),
