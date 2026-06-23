@@ -14,8 +14,14 @@ import {
   resolveProjectKnowledgePath,
 } from "./chatContext.mjs";
 import { mountPlatformApi } from "./platformApi.mjs";
+import { optionalAuth } from "./middleware/optionalAuth.mjs";
+import { addChatMessage, countChatsToday } from "./db/store.mjs";
+import { roleLimits } from "./lib/roles.mjs";
+import { configureGeminiNetwork, isNetworkFetchError } from "./lib/geminiNetwork.mjs";
+import { randomUUID } from "node:crypto";
 
 dotenv.config();
+configureGeminiNetwork();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 /** Repo `public/logo.jpeg` (three levels up from `src/` → project root). Override with CONTACT_LOGO_PATH if needed. */
@@ -69,9 +75,10 @@ function isQuotaOrRateLimitError(err) {
 /** Transient Google errors — retry or try another model. */
 function isRetryableGeminiError(err) {
   if (!err) return false;
+  if (isNetworkFetchError(err)) return true;
   if (err.status === 429 || err.status === 503 || err.status === 500) return true;
   const s = String(err.message || "");
-  return /503|502|500|429|Service Unavailable|high demand|try again later|RESOURCE_EXHAUSTED|Too Many Requests/i.test(
+  return /503|502|500|429|Service Unavailable|high demand|try again later|RESOURCE_EXHAUSTED|Too Many Requests|fetch failed/i.test(
     s,
   );
 }
@@ -157,11 +164,33 @@ app.get("/health", (_req, res) => {
 
 const CHAT_LANG = new Set(["en", "rw", "sw", "fr", "kg"]);
 
-app.post("/api/chat", async (req, res) => {
+app.post("/api/chat", optionalAuth, async (req, res) => {
   if (!GEMINI_API_KEY) {
     res.status(503).json({
       ok: false,
       message: "Chat is not configured. Set GEMINI_API_KEY in the API server environment.",
+    });
+    return;
+  }
+
+  if (!req.user) {
+    res.status(401).json({
+      ok: false,
+      code: "AUTH_REQUIRED",
+      message: "Please sign in to use the AI assistant.",
+    });
+    return;
+  }
+
+  const limits = roleLimits(req.user);
+  const chatsToday = countChatsToday(req.user.id);
+  if (chatsToday >= limits.chatsPerDay) {
+    res.status(429).json({
+      ok: false,
+      code: "CHAT_LIMIT",
+      message: "Daily chat limit reached. You can send up to 10 messages per day.",
+      chatsToday,
+      chatsLimit: limits.chatsPerDay,
     });
     return;
   }
@@ -296,9 +325,27 @@ app.post("/api/chat", async (req, res) => {
       res.status(502).json({ ok: false, message: "Empty model response." });
       return;
     }
+
+    addChatMessage({
+      id: randomUUID(),
+      userId: req.user.id,
+      preview: userText.slice(0, 120),
+      createdAt: Date.now(),
+    });
+
     res.json({ ok: true, message: reply.trim() });
   } catch (err) {
     console.error("[chat]", err);
+    if (isNetworkFetchError(err)) {
+      res.status(503).json({
+        ok: false,
+        code: "GEMINI_NETWORK",
+        message:
+          "Could not reach Google Gemini (network timeout). Check your internet connection, firewall, or VPN. " +
+          "The server is configured to use IPv4 for Gemini requests.",
+      });
+      return;
+    }
     if (isQuotaOrRateLimitError(err)) {
       res.status(429).json({
         ok: false,

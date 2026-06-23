@@ -18,3 +18,12 @@ export function requireAuth(req, res, next) {
     return fail(res, "Invalid or expired token", 401, { code: "AUTH_INVALID" });
   }
 }
+
+export function requireSuperAdmin(req, res, next) {
+  requireAuth(req, res, () => {
+    if (req.user?.role !== "superadmin") {
+      return fail(res, "SuperAdmin access required", 403, { code: "FORBIDDEN" });
+    }
+    next();
+  });
+}

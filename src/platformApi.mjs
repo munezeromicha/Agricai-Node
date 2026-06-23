@@ -5,17 +5,23 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { fail, ok } from "./lib/responses.mjs";
 import { signAccessToken, signRefreshToken, verifyToken } from "./lib/jwt.mjs";
-import { requireAuth } from "./middleware/auth.mjs";
+import { requireAuth, requireSuperAdmin } from "./middleware/auth.mjs";
 import {
   addScan,
+  addChatMessage,
   countScansToday,
+  countChatsToday,
   createUser,
+  deleteUser,
   findRefreshToken,
   findUserByEmail,
   findUserById,
+  getPlatformStats,
   getSubscription,
   initStore,
   listScansForUser,
+  listAllScans,
+  listUsers,
   publicUser,
   purgeExpiredRefreshTokens,
   saveRefreshToken,
@@ -26,7 +32,6 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BCRYPT_ROUNDS = Number(process.env.BCRYPT_ROUNDS) || 12;
-const FREE_SCANS_PER_DAY = Number(process.env.FREE_SCANS_PER_DAY) || 5;
 const BILLING_STUB_MODE = String(process.env.BILLING_STUB_MODE ?? "true").toLowerCase() === "true";
 const OPEN_METEO_BASE = process.env.OPEN_METEO_BASE?.trim() || "https://api.open-meteo.com/v1/forecast";
 const WEATHER_CACHE_TTL_MS = (Number(process.env.WEATHER_CACHE_TTL_SEC) || 900) * 1000;
@@ -49,20 +54,46 @@ function loadCrops() {
   return JSON.parse(readFileSync(p, "utf8"));
 }
 
-function planLimits(plan) {
-  if (plan === "pro" || plan === "enterprise") return { scansPerDay: Infinity, pdfExport: true, chatbot: true };
-  return { scansPerDay: FREE_SCANS_PER_DAY, pdfExport: false, chatbot: false };
+import { roleLimits, FARMER_SCANS_PER_DAY, FARMER_CHATS_PER_DAY } from "./lib/roles.mjs";
+
+async function seedSuperAdmin() {
+  const email = process.env.SUPERADMIN_EMAIL?.trim().toLowerCase();
+  const password = process.env.SUPERADMIN_PASSWORD;
+  const name = process.env.SUPERADMIN_NAME?.trim() || "Super Admin";
+  if (!email || !password) return;
+
+  const existing = findUserByEmail(email);
+  if (existing) {
+    if (existing.role !== "superadmin") {
+      updateUser(existing.id, { role: "superadmin", plan: "enterprise" });
+      console.info(`[auth] Promoted existing user to SuperAdmin: ${email}`);
+    }
+    return;
+  }
+
+  const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+  createUser({
+    id: randomUUID(),
+    email,
+    name,
+    role: "superadmin",
+    plan: "enterprise",
+    language: "en",
+    passwordHash,
+    createdAt: Date.now(),
+  });
+  console.info(`[auth] SuperAdmin seeded: ${email}`);
 }
 
 export function mountPlatformApi(app) {
   initStore(process.env.DATABASE_PATH?.trim());
+  seedSuperAdmin().catch((err) => console.error("[auth] SuperAdmin seed failed:", err));
 
   // --- Auth ---
   app.post("/api/auth/register", async (req, res) => {
     const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
     const email = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
     const password = typeof req.body?.password === "string" ? req.body.password : "";
-    const role = ["farmer", "restaurant", "enterprise"].includes(req.body?.role) ? req.body.role : "farmer";
 
     if (!name || name.length > 100) return fail(res, "Name is required");
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return fail(res, "Valid email is required");
@@ -75,7 +106,7 @@ export function mountPlatformApi(app) {
       id: randomUUID(),
       email,
       name,
-      role,
+      role: "farmer",
       plan: "free",
       language: "en",
       passwordHash,
@@ -146,12 +177,18 @@ export function mountPlatformApi(app) {
   });
 
   app.get("/api/auth/me", requireAuth, (req, res) => {
-    const limits = planLimits(req.user.plan);
+    const limits = roleLimits(req.user);
     const scansToday = countScansToday(req.user.id);
+    const chatsToday = countChatsToday(req.user.id);
     const sub = getSubscription(req.user.id);
     return ok(res, {
       user: publicUser(req.user),
-      usage: { scansToday, scansLimit: limits.scansPerDay },
+      usage: {
+        scansToday,
+        scansLimit: limits.scansPerDay,
+        chatsToday,
+        chatsLimit: limits.chatsPerDay,
+      },
       subscription: sub,
       features: limits,
     });
@@ -171,10 +208,10 @@ export function mountPlatformApi(app) {
   });
 
   app.post("/api/users/me/scans", requireAuth, (req, res) => {
-    const limits = planLimits(req.user.plan);
+    const limits = roleLimits(req.user);
     const scansToday = countScansToday(req.user.id);
     if (scansToday >= limits.scansPerDay) {
-      return fail(res, "Daily scan limit reached. Upgrade to Pro for unlimited scans.", 429, {
+      return fail(res, "Daily scan limit reached. You can scan up to 10 crops per day.", 429, {
         code: "SCAN_LIMIT",
         scansToday,
         scansLimit: limits.scansPerDay,
@@ -196,12 +233,77 @@ export function mountPlatformApi(app) {
   });
 
   app.get("/api/users/me/usage", requireAuth, (req, res) => {
-    const limits = planLimits(req.user.plan);
+    const limits = roleLimits(req.user);
     return ok(res, {
       scansToday: countScansToday(req.user.id),
       scansLimit: limits.scansPerDay,
+      chatsToday: countChatsToday(req.user.id),
+      chatsLimit: limits.chatsPerDay,
       features: limits,
     });
+  });
+
+  app.post("/api/users/me/chats", requireAuth, (req, res) => {
+    const limits = roleLimits(req.user);
+    const chatsToday = countChatsToday(req.user.id);
+    if (chatsToday >= limits.chatsPerDay) {
+      return fail(res, "Daily chat limit reached. You can send up to 10 messages per day.", 429, {
+        code: "CHAT_LIMIT",
+        chatsToday,
+        chatsLimit: limits.chatsPerDay,
+      });
+    }
+    const record = addChatMessage({
+      id: randomUUID(),
+      userId: req.user.id,
+      preview: String(req.body?.preview ?? "").slice(0, 120),
+      createdAt: Date.now(),
+    });
+    return ok(res, { chat: record, chatsToday: chatsToday + 1 }, 201);
+  });
+
+  // --- SuperAdmin ---
+  app.get("/api/admin/stats", requireSuperAdmin, (_req, res) => {
+    return ok(res, { stats: getPlatformStats() });
+  });
+
+  app.get("/api/admin/users", requireSuperAdmin, (_req, res) => {
+    const users = listUsers().map(publicUser);
+    return ok(res, { users });
+  });
+
+  app.patch("/api/admin/users/:id", requireSuperAdmin, (req, res) => {
+    const target = findUserById(req.params.id);
+    if (!target) return fail(res, "User not found", 404);
+    if (target.id === req.user.id && req.body?.role && req.body.role !== "superadmin") {
+      return fail(res, "Cannot demote your own SuperAdmin account", 400);
+    }
+    const patch = {};
+    if (typeof req.body?.name === "string" && req.body.name.trim()) {
+      patch.name = req.body.name.trim().slice(0, 100);
+    }
+    if (req.body?.role === "superadmin" || req.body?.role === "farmer") {
+      patch.role = req.body.role;
+    }
+    const updated = updateUser(target.id, patch);
+    return ok(res, { user: publicUser(updated) });
+  });
+
+  app.delete("/api/admin/users/:id", requireSuperAdmin, (req, res) => {
+    const target = findUserById(req.params.id);
+    if (!target) return fail(res, "User not found", 404);
+    if (target.id === req.user.id) return fail(res, "Cannot delete your own account", 400);
+    deleteUser(target.id);
+    return ok(res, { deleted: true });
+  });
+
+  app.get("/api/admin/scans", requireSuperAdmin, (req, res) => {
+    const limit = Math.min(Number(req.query.limit) || 100, 500);
+    const scans = listAllScans(limit).map((s) => {
+      const owner = findUserById(s.userId);
+      return { ...s, userName: owner?.name ?? "Unknown", userEmail: owner?.email ?? "" };
+    });
+    return ok(res, { scans });
   });
 
   // --- Weather proxy ---
@@ -278,7 +380,7 @@ export function mountPlatformApi(app) {
           nameEn: "Free",
           nameRw: "Ubuntu",
           priceMonthly: 0,
-          features: { scansPerDay: FREE_SCANS_PER_DAY, pdfExport: false, chatbot: false },
+          features: { scansPerDay: FARMER_SCANS_PER_DAY, chatsPerDay: FARMER_CHATS_PER_DAY, pdfExport: true, chatbot: true },
         },
         {
           id: "pro",
@@ -304,7 +406,7 @@ export function mountPlatformApi(app) {
     return ok(res, {
       plan: req.user.plan,
       subscription: sub,
-      features: planLimits(req.user.plan),
+      features: roleLimits(req.user),
     });
   });
 

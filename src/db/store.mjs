@@ -9,6 +9,7 @@ const EMPTY_STORE = {
   users: [],
   refreshTokens: [],
   scans: [],
+  chatMessages: [],
   subscriptions: [],
 };
 
@@ -108,6 +109,63 @@ export function countScansToday(userId) {
   return readStore().scans.filter((s) => s.userId === userId && s.createdAt >= ts).length;
 }
 
+export function addChatMessage(record) {
+  const store = readStore();
+  if (!store.chatMessages) store.chatMessages = [];
+  store.chatMessages.unshift(record);
+  if (store.chatMessages.length > 10000) store.chatMessages.length = 10000;
+  writeStore(store);
+  return record;
+}
+
+export function countChatsToday(userId) {
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  const ts = start.getTime();
+  const store = readStore();
+  return (store.chatMessages ?? []).filter((m) => m.userId === userId && m.createdAt >= ts).length;
+}
+
+export function listChatsForUser(userId, limit = 50) {
+  return (readStore().chatMessages ?? []).filter((m) => m.userId === userId).slice(0, limit);
+}
+
+export function listAllScans(limit = 200) {
+  return readStore().scans.slice(0, limit);
+}
+
+export function deleteUser(id) {
+  const store = readStore();
+  const idx = store.users.findIndex((u) => u.id === id);
+  if (idx === -1) return false;
+  store.users.splice(idx, 1);
+  store.scans = store.scans.filter((s) => s.userId !== id);
+  store.chatMessages = (store.chatMessages ?? []).filter((m) => m.userId !== id);
+  store.refreshTokens = store.refreshTokens.filter((t) => t.userId !== id);
+  store.subscriptions = store.subscriptions.filter((s) => s.userId !== id);
+  writeStore(store);
+  return true;
+}
+
+export function getPlatformStats() {
+  const store = readStore();
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  const ts = start.getTime();
+  const users = store.users;
+  const scans = store.scans;
+  const chats = store.chatMessages ?? [];
+  return {
+    totalUsers: users.length,
+    farmers: users.filter((u) => u.role !== "superadmin").length,
+    superAdmins: users.filter((u) => u.role === "superadmin").length,
+    totalScans: scans.length,
+    scansToday: scans.filter((s) => s.createdAt >= ts).length,
+    totalChats: chats.length,
+    chatsToday: chats.filter((m) => m.createdAt >= ts).length,
+  };
+}
+
 export function getSubscription(userId) {
   return readStore().subscriptions.find((s) => s.userId === userId) ?? null;
 }
@@ -127,7 +185,7 @@ export function publicUser(user) {
     id: user.id,
     email: user.email,
     name: user.name,
-    role: user.role,
+    role: user.role === "superadmin" ? "superadmin" : "farmer",
     plan: user.plan,
     language: user.language ?? "en",
     createdAt: user.createdAt,
