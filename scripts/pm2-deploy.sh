@@ -8,6 +8,12 @@ cd "$ROOT"
 
 APP_NAME="Agricai-Node"
 
+NODE_MAJOR="$(node -p "process.versions.node.split('.')[0]")"
+if [[ "$NODE_MAJOR" -lt 18 ]]; then
+  echo "Node.js 18+ required (current: $(node -v)). Install Node 20 LTS recommended." >&2
+  exit 1
+fi
+
 if [[ ! -f .env ]]; then
   echo "Missing .env — copy .env.example and set GEMINI_API_KEY, JWT_SECRET, CORS_ORIGINS, SUPERADMIN_*" >&2
   exit 1
