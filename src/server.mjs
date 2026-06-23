@@ -98,11 +98,18 @@ function quotaPlainEnglishMessage() {
   );
 }
 
-const allowedOrigins = (process.env.CORS_ORIGINS ||
-  "http://localhost:8080,http://127.0.0.1:8080,http://localhost:5173,http://127.0.0.1:5173")
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean);
+const PRODUCTION_ORIGINS = ["https://agric-ai.com", "https://www.agric-ai.com"];
+
+const allowedOrigins = [
+  ...new Set([
+    ...PRODUCTION_ORIGINS,
+    ...(process.env.CORS_ORIGINS ||
+      "http://localhost:8080,http://127.0.0.1:8080,http://localhost:5173,http://127.0.0.1:5173")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean),
+  ]),
+];
 
 const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -140,11 +147,17 @@ app.use(express.json({ limit: "512kb" }));
 app.use(
   cors({
     origin(origin, callback) {
-      const ok = !origin || allowedOrigins.includes(origin);
+      // Allow non-browser clients (curl, server-to-server) with no Origin header.
+      if (!origin) {
+        callback(null, true);
+        return;
+      }
+      const ok = allowedOrigins.includes(origin);
       callback(null, ok);
     },
     methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
+    optionsSuccessStatus: 204,
   }),
 );
 

@@ -1,0 +1,8 @@
+# Platform API (PM2 / Node on :3008). Merge into your server Caddyfile or:
+#   caddy reload --config /path/to/Caddyfile
+#
+# Requires Agricai-Node running: ./scripts/pm2-deploy.sh
+
+api.agric-ai.com {
+	reverse_proxy 127.0.0.1:3008
+}
