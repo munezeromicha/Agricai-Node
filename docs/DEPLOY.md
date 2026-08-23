@@ -13,6 +13,34 @@ curl -sI https://api.agric-ai.com/health
 - `HTTP/2 200` + JSON body → API is up; then check `CORS_ORIGINS` if login still fails.
 - `HTTP/1.1 502` → PM2 process down or wrong port. On the server: `pm2 logs Agricai-Node --lines 50`
 
+**One command that explains a 502.** On the server (or locally before deploying):
+
+```bash
+cd Agricai-Node && npm run doctor
+```
+
+It checks, in the order a request meets them: `.env` values, `JWT_SECRET` strength,
+`CORS_ORIGINS`, the SuperAdmin seed, the data store's readability and permissions, whether
+anything is actually listening on port 3008, and the public `https://api.agric-ai.com/health`.
+Every failure prints the command that fixes it. It exits non-zero, and `scripts/pm2-deploy.sh`
+runs it **before** restarting — a bad environment stops the deploy instead of turning a running
+API into a crash loop.
+
+## Startup guard: JWT_SECRET
+
+With `NODE_ENV=production`, the API refuses to start unless `JWT_SECRET` is set, is not the
+example placeholder, and is at least 32 characters. A guessable signing key would let anyone mint
+a SuperAdmin token, so this is deliberate — but it means a weak secret shows up as a **502**, with
+the reason printed in `pm2 logs Agricai-Node`.
+
+```bash
+node -e "console.log(require('node:crypto').randomBytes(48).toString('hex'))"
+# put the value in Agricai-Node/.env as JWT_SECRET=…
+pm2 restart Agricai-Node
+```
+
+Rotating `JWT_SECRET` signs everyone out; they log in again and no data is lost.
+
 Common crash on Node 18: `undici@7` → `ReferenceError: File is not defined`. Use `undici@6` (see `package.json`) and redeploy.
 
 ## 1. Server `.env`

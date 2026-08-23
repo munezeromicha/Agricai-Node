@@ -21,6 +21,15 @@ fi
 
 npm install --omit=dev
 
+# Catch a bad environment BEFORE restarting, so a misconfiguration cannot turn a
+# running API into a crash loop (Caddy would answer 502 with no CORS headers).
+if ! NODE_ENV=production node scripts/doctor.mjs; then
+  echo "" >&2
+  echo "Deploy stopped: fix the problems above, then re-run this script." >&2
+  echo "The currently running API (if any) was left untouched." >&2
+  exit 1
+fi
+
 pm2 delete "$APP_NAME" 2>/dev/null || true
 pm2 start ecosystem.config.cjs
 pm2 save
