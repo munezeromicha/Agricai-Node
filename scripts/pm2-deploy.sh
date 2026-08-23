@@ -29,7 +29,15 @@ echo ""
 pm2 list
 echo ""
 echo "Smoke test:"
-curl -sf "http://127.0.0.1:3008/health" && echo || {
+curl -sf "http://127.0.0.1:3008/health" && echo "OK /health" || {
   echo "Health check failed. Run: pm2 logs $APP_NAME --lines 50" >&2
+  exit 1
+}
+curl -sfI -X OPTIONS "http://127.0.0.1:3008/api/auth/login" \
+  -H "Origin: https://agric-ai.com" \
+  -H "Access-Control-Request-Method: POST" \
+  -H "Access-Control-Request-Headers: content-type" \
+  | grep -qi "access-control-allow-origin" && echo "OK CORS preflight" || {
+  echo "CORS preflight missing Access-Control-Allow-Origin. Check CORS_ORIGINS and server.mjs" >&2
   exit 1
 }

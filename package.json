@@ -8,7 +8,10 @@
   },
   "scripts": {
     "start": "node src/server.mjs",
-    "dev": "node --watch src/server.mjs"
+    "dev": "node --watch src/server.mjs",
+    "test": "node --test \"test/**/*.test.mjs\"",
+    "test:watch": "node --test --watch \"test/**/*.test.mjs\"",
+    "smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.0",

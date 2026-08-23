@@ -143,21 +143,37 @@ function createTransport() {
 }
 
 const app = express();
+app.disable("x-powered-by");
+app.set("trust proxy", Number(process.env.TRUST_PROXY_HOPS) || 1);
 app.use(express.json({ limit: "512kb" }));
+
+/** Baseline hardening headers (kept dependency-free). */
+app.use((_req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("Cross-Origin-Resource-Policy", "same-site");
+  res.setHeader("Permissions-Policy", "geolocation=(self), camera=(self), microphone=()");
+  next();
+});
 app.use(
   cors({
     origin(origin, callback) {
-      // Allow non-browser clients (curl, server-to-server) with no Origin header.
       if (!origin) {
         callback(null, true);
         return;
       }
-      const ok = allowedOrigins.includes(origin);
-      callback(null, ok);
+      if (allowedOrigins.includes(origin)) {
+        callback(null, origin);
+        return;
+      }
+      console.warn(`[cors] Blocked origin: ${origin}`);
+      callback(null, false);
     },
     methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
     optionsSuccessStatus: 204,
+    maxAge: 86400,
   }),
 );
 
@@ -567,6 +583,20 @@ function buildContactEmailHtml({ name, email, subject, message, logoCid }) {
 </body>
 </html>`;
 }
+
+/** Malformed JSON and unexpected throws answer in the API's JSON envelope, never an HTML stack trace. */
+app.use((err, _req, res, _next) => {
+  if (err?.type === "entity.parse.failed") {
+    res.status(400).json({ ok: false, message: "Invalid JSON body." });
+    return;
+  }
+  if (err?.type === "entity.too.large") {
+    res.status(413).json({ ok: false, message: "Request body too large." });
+    return;
+  }
+  console.error("[api] Unhandled error:", err);
+  res.status(500).json({ ok: false, message: "Internal server error." });
+});
 
 const server = app.listen(PORT, () => {
   console.log(`Contact API listening on http://localhost:${PORT}`);

@@ -2,7 +2,18 @@
 
 The frontend at **https://agric-ai.com** calls **https://api.agric-ai.com** for login, chat, weather, and contact.
 
-If you see **502 Bad Gateway** or **CORS blocked**, the Node API is usually **not running** behind Caddy (the browser shows CORS because the proxy error has no `Access-Control-Allow-Origin` header).
+If you see **502 Bad Gateway** or **CORS blocked** on `https://agric-ai.com`, the Node API is usually **not running** behind Caddy. Browsers report *“No Access-Control-Allow-Origin”* because **Caddy’s 502 response has no CORS headers** — fix the API first, not the frontend.
+
+Quick check from your laptop:
+
+```bash
+curl -sI https://api.agric-ai.com/health
+```
+
+- `HTTP/2 200` + JSON body → API is up; then check `CORS_ORIGINS` if login still fails.
+- `HTTP/1.1 502` → PM2 process down or wrong port. On the server: `pm2 logs Agricai-Node --lines 50`
+
+Common crash on Node 18: `undici@7` → `ReferenceError: File is not defined`. Use `undici@6` (see `package.json`) and redeploy.
 
 ## 1. Server `.env`
 

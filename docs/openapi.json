@@ -2,13 +2,29 @@
   "openapi": "3.0.3",
   "info": {
     "title": "AGRIC AI Platform API",
-    "description": "Authentication, users, weather, crops, and billing for AGRIC AI. Vision detection is on the Python service at /v1/detect.",
-    "version": "1.0.0"
+    "description": "Authentication, farmers, scans with GPS and confidence bands, farmer feedback, the recommendation engine, weather intelligence, notifications, billing and executive analytics. Vision detection is on the Python service at /v1/detect.",
+    "version": "1.1.0"
   },
-  "servers": [{ "url": "http://localhost:3008", "description": "Local dev" }],
+  "servers": [
+    {
+      "url": "http://localhost:3008",
+      "description": "Local dev"
+    },
+    {
+      "url": "https://api.agric-ai.com",
+      "description": "Production"
+    }
+  ],
   "paths": {
     "/health": {
-      "get": { "summary": "Health check", "responses": { "200": { "description": "OK" } } }
+      "get": {
+        "summary": "Health check",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
     },
     "/api/auth/register": {
       "post": {
@@ -18,18 +34,40 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["name", "email", "password"],
+                "required": [
+                  "name",
+                  "email",
+                  "password"
+                ],
                 "properties": {
-                  "name": { "type": "string" },
-                  "email": { "type": "string", "format": "email" },
-                  "password": { "type": "string", "minLength": 8 },
-                  "role": { "type": "string", "enum": ["farmer", "restaurant", "enterprise"] }
+                  "name": {
+                    "type": "string",
+                    "maxLength": 100
+                  },
+                  "email": {
+                    "type": "string",
+                    "format": "email"
+                  },
+                  "password": {
+                    "type": "string",
+                    "minLength": 8
+                  },
+                  "phone": {
+                    "type": "string"
+                  },
+                  "district": {
+                    "type": "string"
+                  }
                 }
               }
             }
           }
         },
-        "responses": { "201": { "description": "User created" } }
+        "responses": {
+          "201": {
+            "description": "User created"
+          }
+        }
       }
     },
     "/api/auth/login": {
@@ -40,71 +78,806 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["email", "password"],
+                "required": [
+                  "email",
+                  "password"
+                ],
                 "properties": {
-                  "email": { "type": "string" },
-                  "password": { "type": "string" }
+                  "email": {
+                    "type": "string"
+                  },
+                  "password": {
+                    "type": "string"
+                  }
                 }
               }
             }
           }
         },
-        "responses": { "200": { "description": "Tokens issued" } }
+        "responses": {
+          "200": {
+            "description": "Tokens issued"
+          }
+        }
       }
     },
     "/api/auth/me": {
       "get": {
         "summary": "Current user profile and usage",
-        "security": [{ "bearerAuth": [] }],
-        "responses": { "200": { "description": "Profile" } }
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Profile"
+          }
+        }
       }
     },
     "/api/weather": {
       "get": {
         "summary": "Weather forecast proxy (Open-Meteo)",
         "parameters": [
-          { "name": "lat", "in": "query", "schema": { "type": "number" } },
-          { "name": "lon", "in": "query", "schema": { "type": "number" } }
+          {
+            "name": "lat",
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "lon",
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          }
         ],
-        "responses": { "200": { "description": "7-day forecast" } }
+        "responses": {
+          "200": {
+            "description": "7-day forecast"
+          }
+        }
       }
     },
     "/api/crops": {
-      "get": { "summary": "List supported crops", "responses": { "200": { "description": "Crop list" } } }
+      "get": {
+        "summary": "List supported crops",
+        "responses": {
+          "200": {
+            "description": "Crop list"
+          }
+        }
+      }
     },
     "/api/crops/{slug}": {
       "get": {
         "summary": "Crop detail",
-        "parameters": [{ "name": "slug", "in": "path", "required": true, "schema": { "type": "string" } }],
-        "responses": { "200": { "description": "Crop detail" } }
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Crop detail"
+          }
+        }
       }
     },
     "/api/billing/plans": {
-      "get": { "summary": "Pricing plans", "responses": { "200": { "description": "Plans" } } }
+      "get": {
+        "summary": "Pricing plans",
+        "responses": {
+          "200": {
+            "description": "Plans"
+          }
+        }
+      }
     },
     "/api/billing/checkout": {
       "post": {
         "summary": "Start checkout (Stripe or stub)",
-        "security": [{ "bearerAuth": [] }],
-        "responses": { "200": { "description": "Checkout URL or stub activation" } }
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Checkout URL or stub activation"
+          }
+        }
       }
     },
     "/api/users/me/scans": {
       "get": {
         "summary": "Scan history",
-        "security": [{ "bearerAuth": [] }],
-        "responses": { "200": { "description": "Scans" } }
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Scans"
+          }
+        }
       },
       "post": {
-        "summary": "Record a scan",
-        "security": [{ "bearerAuth": [] }],
-        "responses": { "201": { "description": "Scan recorded" } }
+        "summary": "Record a scan (idempotent on clientId)",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "diseaseName",
+                  "confidence"
+                ],
+                "properties": {
+                  "clientId": {
+                    "type": "string",
+                    "description": "Device-generated idempotency key"
+                  },
+                  "diseaseName": {
+                    "type": "string"
+                  },
+                  "diseaseNameRw": {
+                    "type": "string"
+                  },
+                  "confidence": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 100
+                  },
+                  "marginPct": {
+                    "type": "number",
+                    "description": "Gap to the runner-up class, in points"
+                  },
+                  "crop": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "healthy",
+                      "disease",
+                      "pest",
+                      "unknown"
+                    ]
+                  },
+                  "topClassId": {
+                    "type": "string"
+                  },
+                  "alternatives": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "class_id": {
+                          "type": "string"
+                        },
+                        "disease_name": {
+                          "type": "string"
+                        },
+                        "confidence": {
+                          "type": "number"
+                        }
+                      }
+                    }
+                  },
+                  "modelVersion": {
+                    "type": "string"
+                  },
+                  "inferenceMode": {
+                    "type": "string"
+                  },
+                  "latitude": {
+                    "type": "number",
+                    "minimum": -90,
+                    "maximum": 90
+                  },
+                  "longitude": {
+                    "type": "number",
+                    "minimum": -180,
+                    "maximum": 180
+                  },
+                  "accuracyM": {
+                    "type": "number"
+                  },
+                  "locationLabel": {
+                    "type": "string"
+                  },
+                  "capturedAt": {
+                    "type": "integer",
+                    "description": "Epoch ms the photo was taken"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Scan recorded with a derived confidence band"
+          },
+          "200": {
+            "description": "Already recorded (duplicate clientId)"
+          },
+          "429": {
+            "description": "Daily scan limit reached"
+          }
+        }
+      }
+    },
+    "/api/auth/refresh": {
+      "post": {
+        "summary": "Rotate an access token",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "refreshToken"
+                ],
+                "properties": {
+                  "refreshToken": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "New token pair"
+          },
+          "401": {
+            "description": "Invalid or expired"
+          }
+        }
+      }
+    },
+    "/api/auth/logout": {
+      "post": {
+        "summary": "Revoke a refresh token",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Logged out"
+          }
+        }
+      }
+    },
+    "/api/users/me/scans/sync": {
+      "post": {
+        "summary": "Replay scans captured offline",
+        "description": "Idempotent per clientId. Max 50 items per batch.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "scans"
+                ],
+                "properties": {
+                  "scans": {
+                    "type": "array",
+                    "maxItems": 50,
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "diseaseName",
+                        "confidence"
+                      ],
+                      "properties": {
+                        "clientId": {
+                          "type": "string",
+                          "description": "Device-generated idempotency key"
+                        },
+                        "diseaseName": {
+                          "type": "string"
+                        },
+                        "diseaseNameRw": {
+                          "type": "string"
+                        },
+                        "confidence": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 100
+                        },
+                        "marginPct": {
+                          "type": "number",
+                          "description": "Gap to the runner-up class, in points"
+                        },
+                        "crop": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "healthy",
+                            "disease",
+                            "pest",
+                            "unknown"
+                          ]
+                        },
+                        "topClassId": {
+                          "type": "string"
+                        },
+                        "alternatives": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "class_id": {
+                                "type": "string"
+                              },
+                              "disease_name": {
+                                "type": "string"
+                              },
+                              "confidence": {
+                                "type": "number"
+                              }
+                            }
+                          }
+                        },
+                        "modelVersion": {
+                          "type": "string"
+                        },
+                        "inferenceMode": {
+                          "type": "string"
+                        },
+                        "latitude": {
+                          "type": "number",
+                          "minimum": -90,
+                          "maximum": 90
+                        },
+                        "longitude": {
+                          "type": "number",
+                          "minimum": -180,
+                          "maximum": 180
+                        },
+                        "accuracyM": {
+                          "type": "number"
+                        },
+                        "locationLabel": {
+                          "type": "string"
+                        },
+                        "capturedAt": {
+                          "type": "integer",
+                          "description": "Epoch ms the photo was taken"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Per-item accepted / duplicate / rejected results"
+          },
+          "413": {
+            "description": "Batch too large"
+          }
+        }
+      }
+    },
+    "/api/scans/{id}/feedback": {
+      "post": {
+        "summary": "Farmer verdict on a diagnosis",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "verdict"
+                ],
+                "properties": {
+                  "verdict": {
+                    "type": "string",
+                    "enum": [
+                      "correct",
+                      "incorrect",
+                      "unsure"
+                    ]
+                  },
+                  "actualDisease": {
+                    "type": "string"
+                  },
+                  "rating": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 5
+                  },
+                  "comment": {
+                    "type": "string",
+                    "maxLength": 1000
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Feedback stored"
+          },
+          "200": {
+            "description": "Existing feedback updated"
+          },
+          "404": {
+            "description": "Scan not found or not yours"
+          }
+        }
+      }
+    },
+    "/api/users/me/feedback": {
+      "get": {
+        "summary": "Your feedback history",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Feedback"
+          }
+        }
+      }
+    },
+    "/api/recommendations": {
+      "get": {
+        "summary": "Smart recommendations from scans + weather",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "crop",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "lat",
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "lon",
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "persist",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Prioritised bilingual action list"
+          }
+        }
+      }
+    },
+    "/api/recommendations/saved": {
+      "get": {
+        "summary": "Previously persisted recommendations",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recommendations"
+          }
+        }
+      }
+    },
+    "/api/recommendations/{id}/complete": {
+      "post": {
+        "summary": "Mark a recommendation done",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Updated"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/api/farms": {
+      "get": {
+        "summary": "Farms and last known GPS anchor",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Farms"
+          }
+        }
+      },
+      "post": {
+        "summary": "Create or update a farm location",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "latitude",
+                  "longitude"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "latitude": {
+                    "type": "number"
+                  },
+                  "longitude": {
+                    "type": "number"
+                  },
+                  "accuracyM": {
+                    "type": "number"
+                  },
+                  "district": {
+                    "type": "string"
+                  },
+                  "sizeHa": {
+                    "type": "number"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created"
+          },
+          "200": {
+            "description": "Updated"
+          },
+          "400": {
+            "description": "Invalid coordinates"
+          }
+        }
+      }
+    },
+    "/api/notifications": {
+      "get": {
+        "summary": "In-app notifications",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Notifications and unread count"
+          }
+        }
+      }
+    },
+    "/api/notifications/{id}/read": {
+      "post": {
+        "summary": "Mark a notification read",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Updated"
+          }
+        }
+      }
+    },
+    "/api/weather/intelligence": {
+      "get": {
+        "summary": "Forecast plus disease pressure, spray windows and advisories",
+        "parameters": [
+          {
+            "name": "lat",
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "lon",
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Weather intelligence"
+          },
+          "502": {
+            "description": "Upstream unavailable"
+          }
+        }
+      }
+    },
+    "/api/admin/analytics": {
+      "get": {
+        "summary": "Executive analytics (SuperAdmin)",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "days",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 7,
+              "maximum": 90,
+              "default": 30
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Growth, engagement, model quality, surveillance, revenue"
+          },
+          "403": {
+            "description": "SuperAdmin only"
+          }
+        }
+      }
+    },
+    "/api/admin/feedback": {
+      "get": {
+        "summary": "All farmer feedback (SuperAdmin)",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Feedback"
+          }
+        }
+      }
+    },
+    "/api/admin/scans": {
+      "get": {
+        "summary": "All scans (SuperAdmin)",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Scans"
+          }
+        }
+      }
+    },
+    "/api/admin/stats": {
+      "get": {
+        "summary": "Headline counters (SuperAdmin)",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stats"
+          }
+        }
       }
     }
   },
   "components": {
     "securitySchemes": {
-      "bearerAuth": { "type": "http", "scheme": "bearer", "bearerFormat": "JWT" }
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
     }
   }
 }

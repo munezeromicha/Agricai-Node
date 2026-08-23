@@ -1,0 +1,97 @@
+# AGRIC AI — production Caddyfile (merge into /etc/caddy/Caddyfile)
+#
+# Prerequisites on the server:
+#   - PM2: Agricai-Node on 127.0.0.1:3008, Agricai-Python on 127.0.0.1:8000
+#   - Frontend build: /var/www/agric-ai/dist (or your path)
+#   - DNS A records → this server for agric-ai.com, api., ai., www.
+#
+# Validate & reload:
+#   sudo caddy validate --config /etc/caddy/Caddyfile
+#   sudo systemctl reload caddy
+
+{
+	# Optional: email for Let's Encrypt expiry notices
+	# email admin@agric-ai.com
+
+	# Slightly safer defaults
+	servers {
+		trusted_proxies static private_ranges
+	}
+}
+
+# ─── Redirect www → apex (optional; pick one canonical host) ───
+www.agric-ai.com {
+	redir https://agric-ai.com{uri} permanent
+}
+
+# ─── Frontend (Vite static build) ───
+agric-ai.com {
+	root * /var/www/agric-ai/dist
+	encode gzip zstd
+
+	# SPA: serve index.html for client routes
+	try_files {path} /index.html
+
+	# Cache hashed assets aggressively; never cache index.html
+	@assets path /assets/*
+	header @assets Cache-Control "public, max-age=31536000, immutable"
+	@html path /index.html
+	header @html Cache-Control "no-cache"
+
+	# Security headers (frontend)
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options SAMEORIGIN
+		Referrer-Policy strict-origin-when-cross-origin
+		Permissions-Policy "camera=(self), geolocation=(self)"
+	}
+
+	file_server
+}
+
+# ─── Platform API (Node / auth, chat, weather, contact) ───
+api.agric-ai.com {
+	encode gzip
+
+	header {
+		X-Content-Type-Options nosniff
+		-Server
+	}
+
+	reverse_proxy 127.0.0.1:3008 {
+		# Fail fast if PM2 is down (clear 502 instead of hanging)
+		transport http {
+			read_timeout 120s
+			write_timeout 120s
+		}
+		health_uri /health
+		health_interval 30s
+		health_timeout 5s
+	}
+}
+
+# ─── Vision API (Python / leaf disease detect) ───
+ai.agric-ai.com {
+	encode gzip
+
+	header {
+		X-Content-Type-Options nosniff
+		-Server
+	}
+
+	# Leaf photos from phones; default Caddy limit is often 100MB — tune if needed
+	request_body {
+		max_size 15MB
+	}
+
+	reverse_proxy 127.0.0.1:8000 {
+		# ML inference + cold start can be slow
+		transport http {
+			read_timeout 180s
+			write_timeout 180s
+		}
+		health_uri /health
+		health_interval 30s
+		health_timeout 10s
+	}
+}
