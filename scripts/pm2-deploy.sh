@@ -23,7 +23,11 @@ npm install --omit=dev
 
 # Catch a bad environment BEFORE restarting, so a misconfiguration cannot turn a
 # running API into a crash loop (Caddy would answer 502 with no CORS headers).
-if ! NODE_ENV=production node scripts/doctor.mjs; then
+#
+# --pre-deploy checks configuration only. Without it the gate also blocks on "nothing
+# is listening on :3008" and "api.agric-ai.com returns 502" — the very symptoms of the
+# outage this script exists to end, which deadlocked a real recovery.
+if ! NODE_ENV=production node scripts/doctor.mjs --pre-deploy; then
   echo "" >&2
   echo "Deploy stopped: fix the problems above, then re-run this script." >&2
   echo "The currently running API (if any) was left untouched." >&2

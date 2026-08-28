@@ -18,6 +18,14 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 dotenv.config({ path: path.join(ROOT, ".env") });
 
 const PUBLIC_HOST = process.env.DOCTOR_PUBLIC_URL?.trim() || "https://api.agric-ai.com";
+/**
+ * Set by `scripts/pm2-deploy.sh`, which runs this script as a gate *before* restarting.
+ * In that mode the liveness checks below (PM2 state, port, public /health) describe the
+ * outage the deploy is about to end, so they report instead of block — otherwise the
+ * script that starts the API refuses to run precisely because the API is down.
+ * A plain `npm run doctor` keeps them blocking; diagnosing a dead API is its job.
+ */
+const PRE_DEPLOY = process.argv.includes("--pre-deploy");
 const PORT = Number(process.env.PORT) || 3008;
 
 const problems = [];
@@ -34,8 +42,56 @@ function warn(label, detail, fix) {
   console.log(`  WARN  ${label}${detail ? ` — ${detail}` : ""}`);
   warnings.push({ label, detail, fix });
 }
+/** A "the API is not serving right now" finding — blocking, except during a pre-deploy gate. */
+function down(label, detail, fix) {
+  if (!PRE_DEPLOY) {
+    bad(label, detail, fix);
+    return;
+  }
+  console.log(`  INFO  ${label}${detail ? ` — ${detail}` : ""} (the deploy about to run should fix this)`);
+}
 
-console.log("\nAGRIC AI platform API — environment check\n");
+/**
+ * Reads PM2's own view of the app. Returns `{ available: false }` when PM2 is not
+ * installed, so a laptop run stays quiet.
+ */
+async function inspectPm2(appName) {
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const run = promisify(execFile);
+
+  let stdout;
+  try {
+    ({ stdout } = await run("pm2", ["jlist"], { timeout: 10_000, maxBuffer: 8 * 1024 * 1024, shell: process.platform === "win32" }));
+  } catch (err) {
+    if (err.code === "ENOENT" || /not recognized|not found/i.test(err.message)) return { available: false };
+    return { available: true, error: `could not read pm2 state (${err.code ?? err.message})` };
+  }
+
+  try {
+    const list = JSON.parse(stdout);
+    const app = list.find((a) => a.name === appName);
+    if (!app) return { available: true, app: null };
+    return {
+      available: true,
+      app: {
+        status: app.pm2_env?.status ?? "unknown",
+        restarts: app.pm2_env?.restart_time ?? 0,
+        unstableRestarts: app.pm2_env?.unstable_restarts ?? 0,
+        uptimeMs: app.pm2_env?.status === "online" && app.pm2_env?.pm_uptime ? Date.now() - app.pm2_env.pm_uptime : 0,
+        errLog: app.pm2_env?.pm_err_log_path ?? null,
+      },
+    };
+  } catch {
+    return { available: true, error: "pm2 jlist returned output this script could not parse" };
+  }
+}
+
+console.log(
+  PRE_DEPLOY
+    ? "\nAGRIC AI platform API — pre-deploy check (configuration only)\n"
+    : "\nAGRIC AI platform API — environment check\n",
+);
 
 // --- 1. Environment ---
 console.log("Environment");
@@ -54,7 +110,7 @@ const secret = process.env.JWT_SECRET?.trim() ?? "";
 const secretIssue = jwtSecretProblem ? jwtSecretProblem(secret, "production") : null;
 if (secretIssue) {
   const fix =
-    'node -e "console.log(require(\'node:crypto\').randomBytes(48).toString(\'hex\'))" → put it in .env as JWT_SECRET, then: pm2 restart Agricai-Node';
+    'node -e "console.log(require(\'node:crypto\').randomBytes(48).toString(\'hex\'))" → put it in .env as JWT_SECRET, then: pm2 start ecosystem.config.cjs --update-env';
   if (isProd) bad("JWT_SECRET", secretIssue, fix);
   // Not production yet, but this exact value will refuse to boot once NODE_ENV=production.
   else warn("JWT_SECRET", `${secretIssue} — this WILL block startup in production`, fix);
@@ -110,7 +166,34 @@ if (existsSync(dbPath)) {
   warn("store.json", "does not exist yet — it is created empty on first start", "");
 }
 
-// --- 3. Port ---
+// --- 3. Process manager ---
+// When the port is dead, the next question is always "is PM2 not running it, or is it
+// crash-looping?" — answer it here instead of making someone go read pm2 logs blind.
+console.log("\nProcess manager");
+const pm2Report = await inspectPm2("Agricai-Node");
+if (pm2Report.available === false) {
+  ok("pm2", "not installed on this machine (fine for local dev)");
+} else if (pm2Report.error) {
+  warn("pm2", pm2Report.error, "pm2 list");
+} else if (!pm2Report.app) {
+  down("pm2 process", "no app named Agricai-Node is registered", "pm2 start ecosystem.config.cjs --update-env && pm2 save");
+} else {
+  const { status, restarts, unstableRestarts, uptimeMs, errLog } = pm2Report.app;
+  const uptime = uptimeMs > 0 ? `${Math.round(uptimeMs / 1000)}s uptime` : "not running";
+  if (status === "online" && unstableRestarts === 0) {
+    ok("pm2 process", `online, ${uptime}, ${restarts} restart(s)`);
+  } else if (status === "online") {
+    warn("pm2 process", `online but restarted unstably ${unstableRestarts}x — it is crash-looping`, `pm2 logs Agricai-Node --lines 50 --nostream${errLog ? ` (or: tail -50 ${errLog})` : ""}`);
+  } else {
+    down(
+      "pm2 process",
+      `status "${status}" after ${restarts} restart(s) — the app is not serving`,
+      `see the crash: pm2 logs Agricai-Node --lines 50 --nostream${errLog ? `  |  tail -50 ${errLog}` : ""}`,
+    );
+  }
+}
+
+// --- 4. Port ---
 console.log("\nPort");
 const portState = await new Promise((resolve) => {
   const socket = net.connect({ port: PORT, host: "127.0.0.1" });
@@ -132,26 +215,26 @@ if (portState === "in-use") {
     const res = await fetch(`http://127.0.0.1:${PORT}/health`, { signal: AbortSignal.timeout(3000) });
     const body = await res.json().catch(() => ({}));
     if (res.ok && body.ok) ok(`localhost:${PORT}`, `API healthy (${body.service ?? "api"})`);
-    else bad(`localhost:${PORT}`, `something is listening but /health returned ${res.status}`, "pm2 logs Agricai-Node --lines 50");
+    else down(`localhost:${PORT}`, `something is listening but /health returned ${res.status}`, "pm2 logs Agricai-Node --lines 50");
   } catch {
-    bad(`localhost:${PORT}`, "port occupied by a process that does not answer /health", `stop it, or set a different PORT in .env`);
+    down(`localhost:${PORT}`, "port occupied by a process that does not answer /health", `stop it, or set a different PORT in .env`);
   }
 } else {
-  bad(
+  down(
     `localhost:${PORT}`,
     "nothing is listening — this is what makes Caddy return 502",
     "pm2 start ecosystem.config.cjs   (then: pm2 logs Agricai-Node --lines 50)",
   );
 }
 
-// --- 4. Public hostname ---
+// --- 5. Public hostname ---
 console.log("\nPublic endpoint");
 try {
   const res = await fetch(`${PUBLIC_HOST}/health`, { signal: AbortSignal.timeout(8000) });
   if (res.ok) {
     ok(`${PUBLIC_HOST}/health`, `HTTP ${res.status}`);
   } else if (res.status === 502 || res.status === 503) {
-    bad(
+    down(
       `${PUBLIC_HOST}/health`,
       `HTTP ${res.status} — the proxy cannot reach the API`,
       "the API process is down; a 502 has no CORS headers, which is why the browser reports a CORS error",

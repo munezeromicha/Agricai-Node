@@ -1,6 +1,9 @@
+// MUST be first: loads .env before any module below reads process.env at import time.
+// See src/loadEnv.mjs — getting this order wrong once took the production API down.
+import "./loadEnv.mjs";
+
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import cors from "cors";
-import dotenv from "dotenv";
 import express from "express";
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -18,9 +21,11 @@ import { optionalAuth } from "./middleware/optionalAuth.mjs";
 import { addChatMessage, countChatsToday } from "./db/store.mjs";
 import { roleLimits } from "./lib/roles.mjs";
 import { configureGeminiNetwork, isNetworkFetchError } from "./lib/geminiNetwork.mjs";
+import { assertJwtSecretOrExit } from "./lib/jwt.mjs";
 import { randomUUID } from "node:crypto";
 
-dotenv.config();
+// Environment is already loaded (see the first import); fail fast on an unusable secret.
+assertJwtSecretOrExit();
 configureGeminiNetwork();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));

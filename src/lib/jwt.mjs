@@ -4,9 +4,21 @@ const DEV_SECRET = "agricai-dev-secret-change-in-production";
 const PLACEHOLDERS = new Set([DEV_SECRET, "change-me-in-production", "changeme", "secret"]);
 const MIN_LENGTH = 32;
 
-const configured = process.env.JWT_SECRET?.trim();
+/**
+ * Every value is read at call time, never at import time.
+ *
+ * Reading `process.env` while this module is being imported is what caused a
+ * production outage: ESM evaluates imports before the entry point's `dotenv.config()`,
+ * so the environment was still empty and the dev key was captured as the signing
+ * secret. `src/loadEnv.mjs` fixes the ordering; reading lazily makes the ordering
+ * impossible to get wrong again.
+ */
+function configuredSecret() {
+  return process.env.JWT_SECRET?.trim() || "";
+}
 
-export function jwtSecretProblem(secret = configured, nodeEnv = process.env.NODE_ENV) {
+/** @returns {string|null} a human-readable problem, or null when the secret is acceptable. */
+export function jwtSecretProblem(secret = configuredSecret(), nodeEnv = process.env.NODE_ENV) {
   if (nodeEnv !== "production") return null;
   if (!secret) return "JWT_SECRET is not set";
   if (PLACEHOLDERS.has(secret)) return "JWT_SECRET is still the example placeholder";
@@ -14,54 +26,70 @@ export function jwtSecretProblem(secret = configured, nodeEnv = process.env.NODE
   return null;
 }
 
+function guardBanner(problem) {
+  return [
+    "",
+    "══════════════════════════════════════════════════════════════════",
+    "  AGRIC AI API cannot start: insecure JWT_SECRET",
+    "══════════════════════════════════════════════════════════════════",
+    `  Problem: ${problem}.`,
+    "",
+    "  Fix it on this server:",
+    "    1. Generate a key:",
+    '       node -e "console.log(require(\'node:crypto\').randomBytes(48).toString(\'hex\'))"',
+    "    2. Put it in Agricai-Node/.env as JWT_SECRET=<the value>",
+    "    3. Restart:  pm2 start ecosystem.config.cjs --update-env",
+    "",
+    "  If .env already has a good value and you still see this, the environment was not",
+    "  loaded before this check — confirm src/server.mjs imports ./loadEnv.mjs first.",
+    "",
+    "  Note: changing JWT_SECRET signs everyone out — they log in again, no data is lost.",
+    "  Check the whole environment with:  npm run doctor",
+    "══════════════════════════════════════════════════════════════════",
+    "",
+  ].join("\n");
+}
+
 /**
- * A guessable signing key in production lets anyone mint a SuperAdmin token, so the
- * process refuses to start. The message is printed plainly because this failure is
- * seen by whoever is deploying, in a PM2 log, usually while a site is down.
+ * Called by the entry point after the environment is loaded. Exits with a readable
+ * banner rather than an unhandled exception, because this failure is read in a PM2
+ * log by someone whose site is down.
  */
-const problem = jwtSecretProblem();
-if (problem) {
-  console.error(
-    [
-      "",
-      "══════════════════════════════════════════════════════════════════",
-      "  AGRIC AI API cannot start: insecure JWT_SECRET",
-      "══════════════════════════════════════════════════════════════════",
-      `  Problem: ${problem}.`,
-      "",
-      "  Fix it on this server:",
-      "    1. Generate a key:",
-      '       node -e "console.log(require(\'node:crypto\').randomBytes(48).toString(\'hex\'))"',
-      "    2. Put it in Agricai-Node/.env as JWT_SECRET=<the value>",
-      "    3. Restart:  pm2 restart Agricai-Node",
-      "",
-      "  Note: changing JWT_SECRET signs everyone out — they log in again, no data is lost.",
-      "  Check the whole environment first with:  npm run doctor",
-      "══════════════════════════════════════════════════════════════════",
-      "",
-    ].join("\n"),
-  );
+export function assertJwtSecretOrExit() {
+  const problem = jwtSecretProblem();
+  if (!problem) return;
+  console.error(guardBanner(problem));
   process.exit(1);
 }
 
-const JWT_SECRET = configured || DEV_SECRET;
-const ACCESS_TTL = process.env.JWT_ACCESS_TTL?.trim() || "15m";
-const REFRESH_TTL = process.env.JWT_REFRESH_TTL?.trim() || "7d";
+/**
+ * Backstop: even if the startup assertion is somehow skipped, production must never
+ * sign a token with the development key.
+ */
+function activeSecret() {
+  const problem = jwtSecretProblem();
+  if (problem) throw new Error(`Refusing to sign or verify tokens: ${problem}.`);
+  return configuredSecret() || DEV_SECRET;
+}
 
-if (!configured && process.env.NODE_ENV !== "test") {
-  console.warn("[auth] JWT_SECRET is not set — using the development key. Never do this in production.");
+function accessTtl() {
+  return process.env.JWT_ACCESS_TTL?.trim() || "15m";
+}
+
+function refreshTtl() {
+  return process.env.JWT_REFRESH_TTL?.trim() || "7d";
 }
 
 export function signAccessToken(payload) {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: ACCESS_TTL });
+  return jwt.sign(payload, activeSecret(), { expiresIn: accessTtl() });
 }
 
 export function signRefreshToken(payload) {
-  return jwt.sign({ ...payload, type: "refresh" }, JWT_SECRET, { expiresIn: REFRESH_TTL });
+  return jwt.sign({ ...payload, type: "refresh" }, activeSecret(), { expiresIn: refreshTtl() });
 }
 
 export function verifyToken(token) {
-  return jwt.verify(token, JWT_SECRET);
+  return jwt.verify(token, activeSecret());
 }
 
-export { JWT_SECRET, MIN_LENGTH as JWT_SECRET_MIN_LENGTH };
+export { DEV_SECRET, MIN_LENGTH as JWT_SECRET_MIN_LENGTH };

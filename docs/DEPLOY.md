@@ -26,6 +26,11 @@ Every failure prints the command that fixes it. It exits non-zero, and `scripts/
 runs it **before** restarting — a bad environment stops the deploy instead of turning a running
 API into a crash loop.
 
+The deploy gate runs `npm run doctor -- --pre-deploy`, which checks **configuration only**. A
+plain `npm run doctor` also blocks on "nothing is listening on :3008" and "the public /health
+returns 502" — correct when you are diagnosing, but those are the symptoms of the outage the
+deploy is about to end, so blocking on them would stop the recovery.
+
 ## Startup guard: JWT_SECRET
 
 With `NODE_ENV=production`, the API refuses to start unless `JWT_SECRET` is set, is not the
@@ -36,7 +41,7 @@ the reason printed in `pm2 logs Agricai-Node`.
 ```bash
 node -e "console.log(require('node:crypto').randomBytes(48).toString('hex'))"
 # put the value in Agricai-Node/.env as JWT_SECRET=…
-pm2 restart Agricai-Node
+pm2 start ecosystem.config.cjs --update-env
 ```
 
 Rotating `JWT_SECRET` signs everyone out; they log in again and no data is lost.
